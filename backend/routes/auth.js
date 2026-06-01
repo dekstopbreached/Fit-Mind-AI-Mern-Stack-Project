@@ -70,11 +70,12 @@ router.post("/register", async (req, res) => {
     return res.status(400).json({ message: "Name, email and password are required" });
   }
 
-  const existing = await User.findOne({ email });
+  const normalizedEmail = email.toLowerCase();
+  const existing = await User.findOne({ email: normalizedEmail });
   if (existing) return res.status(400).json({ message: "User already exists" });
 
   const hashed = await bcrypt.hash(password, 10);
-  const user = await User.create({ name, email, password: hashed, avatar: name.charAt(0).toUpperCase() });
+  const user = await User.create({ name, email: normalizedEmail, password: hashed, avatar: name.charAt(0).toUpperCase() });
   await Habit.insertMany(defaultFitnessHabits(user._id));
 
   const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -85,7 +86,8 @@ router.post("/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ message: "Email and password are required" });
 
-  const user = await User.findOne({ email });
+  const normalizedEmail = email.toLowerCase();
+  const user = await User.findOne({ email: normalizedEmail });
   if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
   const isValid = await bcrypt.compare(password, user.password);
