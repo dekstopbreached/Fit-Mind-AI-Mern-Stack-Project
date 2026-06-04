@@ -21,18 +21,32 @@ const provider =
         ? "openai"
         : "gemini";
 
-const client =
-  provider === "openai"
-    ? new OpenAI({ apiKey: openaiApiKey })
-    : new GoogleGenAI({ apiKey: geminiApiKey });
+const openAIClient = new OpenAI({ apiKey: openaiApiKey });
+const geminiClient = new GoogleGenAI({ apiKey: geminiApiKey });
 
-if (provider === "openai" && !openaiApiKey) {
+if (configuredProvider === "openai" && !openaiApiKey) {
   console.error("AI provider is set to OpenAI, but OPENAI_API_KEY is missing.");
 }
 
-if (provider === "gemini" && !geminiApiKey) {
+if (configuredProvider === "gemini" && !geminiApiKey) {
   console.error("AI provider is set to Gemini, but GEMINI_API_KEY is missing.");
 }
+
+// Public diagnostics route (no auth) to help debug configuration
+router.get("/status", (req, res) => {
+  try {
+    res.json({
+      provider,
+      configuredProvider,
+      hasOpenAI: !!openaiApiKey,
+      hasGemini: !!geminiApiKey,
+      openaiModel,
+      geminiModel,
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Could not read AI status" });
+  }
+});
 
 const buildPrompt = (content, user) => `You are FitMind AI, a supportive performance coach and routine advisor.\nUser: ${user?.name || "User"} (${user?.email || "unknown"})\n${content}\nAnswer clearly with practical suggestions and reference consistency, recovery, and progress where helpful.`;
 
@@ -56,20 +70,47 @@ const parseGeminiResponse = (response) => {
   );
 };
 
-const generateText = async (prompt) => {
-  if (provider === "openai") {
-    const response = await client.responses.create({
-      model: openaiModel,
-      input: prompt,
-    });
-    return parseOpenAIResponse(response);
-  }
+const callOpenAI = async (prompt) => {
+  if (!openaiApiKey) throw new Error("OpenAI API key is missing");
+  const response = await openAIClient.responses.create({
+    model: openaiModel,
+    input: prompt,
+  });
+  return parseOpenAIResponse(response);
+};
 
-  const response = await client.models.generateContent({
+const callGemini = async (prompt) => {
+  if (!geminiApiKey) throw new Error("Gemini API key is missing");
+  const response = await geminiClient.models.generateContent({
     model: geminiModel,
     contents: prompt,
   });
   return parseGeminiResponse(response);
+};
+
+const generateText = async (prompt) => {
+  const primaryProvider = provider;
+  const fallbackProvider = provider === "openai" ? "gemini" : "openai";
+
+  const tryProvider = async (prov) => {
+    if (prov === "openai") return callOpenAI(prompt);
+    return callGemini(prompt);
+  };
+
+  try {
+    return await tryProvider(primaryProvider);
+  } catch (primaryError) {
+    console.error(`Primary AI provider '${primaryProvider}' failed:`, primaryError);
+    if ((fallbackProvider === "openai" && openaiApiKey) || (fallbackProvider === "gemini" && geminiApiKey)) {
+      try {
+        return await tryProvider(fallbackProvider);
+      } catch (fallbackError) {
+        console.error(`Fallback AI provider '${fallbackProvider}' also failed:`, fallbackError);
+        throw fallbackError;
+      }
+    }
+    throw primaryError;
+  }
 };
 
 router.use(authMiddleware);
@@ -215,7 +256,7 @@ router.get("/morning", async (req, res) => {
     res.json({ content: content || "Good morning! Let's build a stronger day." });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "AI request failed" });
+    res.status(500).json({ message: "AI request failed", error: error?.message });
   }
 });
 
